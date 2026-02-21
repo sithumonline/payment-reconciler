@@ -188,7 +188,7 @@ function App() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                   <div className="bg-white p-4 rounded-lg border border-emerald-100 shadow-sm">
                     <p className="text-xs text-zinc-500 uppercase font-semibold">Total Existing</p>
                     <p className="text-xl font-mono font-medium text-zinc-900">
@@ -199,6 +199,12 @@ function App() {
                     <p className="text-xs text-zinc-500 uppercase font-semibold">Total Trx Amount</p>
                     <p className="text-xl font-mono font-medium text-zinc-900">
                       {result.summary.totalTrx.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                  <div className="bg-white p-4 rounded-lg border border-emerald-100 shadow-sm">
+                    <p className="text-xs text-zinc-500 uppercase font-semibold">Total Com Amount</p>
+                    <p className="text-xl font-mono font-medium text-zinc-900">
+                      {result.summary.totalCommission.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                   <div className="bg-white p-4 rounded-lg border border-emerald-100 shadow-sm">

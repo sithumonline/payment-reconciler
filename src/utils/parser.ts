@@ -21,6 +21,7 @@ export interface ProcessedResult {
   summary: {
     totalExisting: number;
     totalTrx: number;
+    totalCommission: number;
     totalNet: number;
     matchedCount: number;
   };
@@ -156,6 +157,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
 
   let totalExisting = 0;
   let totalTrx = 0;
+  let totalCommission = 0;
   let totalNet = 0;
   let matchedCount = 0;
   const matchedAuthIds = new Set<string>();
@@ -181,6 +183,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
     if (match) {
       matchedCount++;
       totalTrx += match.tranAmount;
+      totalCommission += match.commission;
       totalNet += match.netAmount;
       matchedAuthIds.add(match.authId);
 
@@ -223,6 +226,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
   const summary = {
     totalExisting,
     totalTrx,
+    totalCommission,
     totalNet,
     matchedCount
   };
@@ -235,7 +239,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
     'MERCHANT NUMBER': '',
     'TRX.AMT': summary.totalTrx,
     'CARD NUMBER': '',
-    'COM. AMOUNT': '',
+    'COM. AMOUNT': summary.totalCommission,
     'NET. AMT': summary.totalNet
   };
 
