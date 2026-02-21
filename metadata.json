@@ -1,0 +1,5 @@
+{
+  "name": "Payment Reconciler",
+  "description": "Enterprise tool to reconcile payment schedules with transaction logs.",
+  "requestFramePermissions": []
+}
