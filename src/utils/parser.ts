@@ -223,6 +223,25 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
       'NET. AMT': t.netAmount
     }));
 
+  const byMerchantNumber = (a: any, b: any) => {
+    const merchantA = (a['MERCHANT NUMBER'] || '').toString().trim();
+    const merchantB = (b['MERCHANT NUMBER'] || '').toString().trim();
+
+    // Keep rows without merchant number at the end.
+    if (!merchantA && merchantB) return 1;
+    if (merchantA && !merchantB) return -1;
+
+    const merchantCompare = merchantA.localeCompare(merchantB, undefined, { numeric: true });
+    if (merchantCompare !== 0) return merchantCompare;
+
+    const authA = (a.AUTH || '').toString().trim();
+    const authB = (b.AUTH || '').toString().trim();
+    return authA.localeCompare(authB, undefined, { numeric: true });
+  };
+
+  const groupedUpdatedData = [...updatedData].sort(byMerchantNumber);
+  const groupedUnmatchedRows = [...unmatchedRows].sort(byMerchantNumber);
+
   const summary = {
     totalExisting,
     totalTrx,
@@ -268,7 +287,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
   };
 
   return {
-    updatedData: [...updatedData, totalsRow, ...spacerRows, unmatchedHeaderRow, ...unmatchedRows],
+    updatedData: [...groupedUpdatedData, totalsRow, ...spacerRows, unmatchedHeaderRow, ...groupedUnmatchedRows],
     summary
   };
 };
