@@ -252,9 +252,9 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
   }));
 
   const unmatchedHeaderRow = {
-    '#': '#',
-    'Voucher No.': 'Voucher No.',
-    Total: 'Total',
+    '#': '',
+    'Voucher No.': '',
+    Total: '',
     AUTH: 'AUTH',
     'MERCHANT NUMBER': 'MERCHANT NUMBER',
     'TRX.AMT': 'TRX.AMT',
