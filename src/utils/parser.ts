@@ -1,4 +1,11 @@
 import * as XLSX from 'xlsx';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import MsgReader from 'msgreader';
+
+GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/legacy/build/pdf.worker.mjs',
+  import.meta.url
+).toString();
 
 export interface ExcelRow {
   '#'?: string | number;
@@ -26,6 +33,162 @@ export interface ProcessedResult {
     matchedCount: number;
   };
 }
+
+export interface NtbMessageMetadata {
+  attachmentName: string | null;
+  merchantId: string | null;
+}
+
+export const normalizeMessageContent = (content: string): string => {
+  return content.replace(/\u0000/g, '');
+};
+
+export const isNtbStatementContent = (content: string): boolean => {
+  return /Nations Trust|Merchant E-\s*Statement|ntb<Merchant ID>/i.test(content);
+};
+
+export const extractNtbMessageMetadata = (content: string, fallbackName = ''): NtbMessageMetadata => {
+  const normalized = normalizeMessageContent(content);
+
+  const attachmentMatch = normalized.match(/X-FE-Attachment-Name:\s*([^\r\n]+\.pdf)/i);
+  const attachmentName = attachmentMatch?.[1]?.trim() || null;
+
+  const sourceForMerchantId = [attachmentName, fallbackName, normalized].filter(Boolean).join('\n');
+  const merchantMatch =
+    sourceForMerchantId.match(/\b(\d{8,})_\d{8,}Statement\.pdf\b/i) ||
+    sourceForMerchantId.match(/Account\s*Number\s*:?\s*(\d{8,})/i);
+
+  return {
+    attachmentName,
+    merchantId: merchantMatch?.[1] || null
+  };
+};
+
+export const buildNtbPdfPassword = (merchantId: string): string => `ntb${merchantId}`;
+
+const parseAmount = (value: string): number => parseFloat(value.replace(/,/g, '').trim());
+
+export const extractPdfTextWithPassword = async (file: File, password: string): Promise<string> => {
+  const data = new Uint8Array(await file.arrayBuffer());
+
+  try {
+    const loadingTask = getDocument({
+      data,
+      password,
+      disableWorker: true
+    } as any);
+
+    const pdf = await loadingTask.promise;
+    const pages: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = content.items
+        .map((item: any) => ('str' in item ? item.str : ''))
+        .join(' ')
+        .trim();
+
+      pages.push(text);
+    }
+
+    return pages.join('\n');
+  } catch (error: any) {
+    const message = (error?.message || '').toLowerCase();
+    if (
+      error?.name === 'PasswordException' ||
+      error?.code === 1 ||
+      error?.code === 2 ||
+      message.includes('password')
+    ) {
+      throw new Error('NTB_PDF_PASSWORD_FAILED');
+    }
+    if (error?.name === 'InvalidPDFException' || message.includes('invalid pdf')) {
+      throw new Error('NTB_PDF_INVALID');
+    }
+    throw error;
+  }
+};
+
+export const parseNtbPdfContent = (content: string, merchantIdFallback = ''): MsgTransaction[] => {
+  const transactions: MsgTransaction[] = [];
+  const merchantMatch = content.match(/Account\s*Number\s*:?\s*(\d{8,})/i);
+  const merchantNumber = merchantMatch?.[1] || merchantIdFallback;
+
+  const rowRegex =
+    /(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s+(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s+([0-9*Xx\-]+)\s+(\d{4,})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})/g;
+  let rowMatch: RegExpExecArray | null;
+
+  while ((rowMatch = rowRegex.exec(content)) !== null) {
+    const cardNumber = rowMatch[3];
+    const authId = rowMatch[4];
+    const tranAmount = parseAmount(rowMatch[5]);
+    const commission = parseAmount(rowMatch[6]);
+    const netAmount = tranAmount - commission;
+
+    if (!isNaN(tranAmount) && !isNaN(commission)) {
+      transactions.push({
+        merchantNumber,
+        cardNumber,
+        tranAmount,
+        commission,
+        netAmount,
+        authId
+      });
+    }
+  }
+
+  return transactions;
+};
+
+const toUint8Array = (value: any): Uint8Array | null => {
+  if (!value) return null;
+  if (value instanceof Uint8Array) return value;
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return null;
+};
+
+export const extractPdfAttachmentFromMsg = async (
+  file: File,
+  preferredAttachmentName: string | null
+): Promise<File | null> => {
+  try {
+    const msgReader = new (MsgReader as any)(await file.arrayBuffer());
+    const msgData = msgReader.getFileData();
+    if (msgData?.error || !Array.isArray(msgData?.attachments)) return null;
+
+    const preferredName = preferredAttachmentName?.toLowerCase() ?? '';
+    const attachments = msgData.attachments as Array<{ fileName?: string }>;
+
+    let selectedAttachment = attachments.find((attachment) =>
+      (attachment?.fileName || '').toLowerCase() === preferredName
+    );
+
+    if (!selectedAttachment) {
+      selectedAttachment = attachments.find((attachment) =>
+        (attachment?.fileName || '').toLowerCase().endsWith('.pdf')
+      );
+    }
+
+    if (!selectedAttachment) return null;
+
+    const attachment = msgReader.getAttachment(selectedAttachment);
+    const bytes = toUint8Array(attachment?.content);
+    const fileName = attachment?.fileName || selectedAttachment.fileName || 'attachment.pdf';
+
+    if (!bytes || bytes.byteLength === 0) return null;
+
+    const safeBytes = new Uint8Array(bytes.byteLength);
+    safeBytes.set(bytes);
+    return new File([safeBytes], fileName, { type: 'application/pdf' });
+  } catch {
+    return null;
+  }
+};
 
 export const parseExcel = async (file: File): Promise<ExcelRow[]> => {
   return new Promise((resolve, reject) => {

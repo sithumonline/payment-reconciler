@@ -8,7 +8,20 @@ import { SingleFileUpload, FolderUpload } from './components/FileUpload';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from './components/ui/card';
 import { Button } from './components/ui/button';
 import { FileSpreadsheet, FileText, Download, Loader2, AlertCircle, CheckCircle, Github } from 'lucide-react';
-import { parseExcel, parseMsgContent, processFiles, type ProcessedResult, type MsgTransaction } from './utils/parser';
+import {
+  buildNtbPdfPassword,
+  extractNtbMessageMetadata,
+  extractPdfAttachmentFromMsg,
+  extractPdfTextWithPassword,
+  isNtbStatementContent,
+  normalizeMessageContent,
+  parseExcel,
+  parseMsgContent,
+  parseNtbPdfContent,
+  processFiles,
+  type ProcessedResult,
+  type MsgTransaction
+} from './utils/parser';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 
@@ -18,6 +31,7 @@ function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [result, setResult] = useState<ProcessedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fileIssues, setFileIssues] = useState<string[]>([]);
 
   const handleProcess = async () => {
     if (!excelFile || msgFiles.length === 0) {
@@ -28,6 +42,7 @@ function App() {
     setIsProcessing(true);
     setError(null);
     setResult(null);
+    setFileIssues([]);
 
     try {
       // 1. Parse Excel
@@ -35,6 +50,26 @@ function App() {
 
       // 2. Parse MSG Files
       const msgTransactions: MsgTransaction[] = [];
+      const issues: string[] = [];
+      const pdfFiles = msgFiles.filter(file => file.name.toLowerCase().endsWith('.pdf'));
+      const pdfFilesByName = new Map<string, File>(pdfFiles.map(file => [file.name.toLowerCase(), file] as [string, File]));
+      const consumedPdfNames = new Set<string>();
+
+      const findNtbPdfFile = (attachmentName: string | null, merchantId: string | null): File | null => {
+        if (attachmentName) {
+          const matchedByAttachmentName = pdfFilesByName.get(attachmentName.toLowerCase());
+          if (matchedByAttachmentName) return matchedByAttachmentName;
+        }
+
+        if (merchantId) {
+          const matchedByMerchantId = pdfFiles.find(file =>
+            file.name.toLowerCase().includes(merchantId.toLowerCase()) && file.name.toLowerCase().endsWith('statement.pdf')
+          );
+          if (matchedByMerchantId) return matchedByMerchantId;
+        }
+
+        return null;
+      };
       
       // Process files in chunks to avoid blocking UI too much
       for (const file of msgFiles) {
@@ -44,14 +79,79 @@ function App() {
         // Let's read content first.
         
         if (file.name.toLowerCase().endsWith('.txt') || file.name.toLowerCase().endsWith('.msg')) {
-           const text = await file.text();
-           // Basic check if it's the right type of file before deep parsing
-           if (text.includes('SAMPATH') || file.name.toUpperCase().includes('SAMPATH')) {
-             const transactions = parseMsgContent(text);
-             msgTransactions.push(...transactions);
-           }
+          const rawText = await file.text();
+          const normalizedText = normalizeMessageContent(rawText);
+          const isNtbFile = isNtbStatementContent(normalizedText) || file.name.toUpperCase().includes('NATIONS');
+
+          if (isNtbFile) {
+            const metadata = extractNtbMessageMetadata(normalizedText, file.name);
+
+            if (!metadata.merchantId) {
+              issues.push(`Skipped ${file.name}: NTB merchant ID not found.`);
+              continue;
+            }
+
+            let pdfFile = findNtbPdfFile(metadata.attachmentName, metadata.merchantId);
+            if (!pdfFile) {
+              pdfFile = await extractPdfAttachmentFromMsg(file, metadata.attachmentName);
+            }
+
+            if (!pdfFile) {
+              issues.push(`Skipped ${file.name}: PDF attachment not found in selected folder.`);
+              continue;
+            }
+
+            const password = buildNtbPdfPassword(metadata.merchantId);
+
+            try {
+              const pdfText = await extractPdfTextWithPassword(pdfFile, password);
+              const transactions = parseNtbPdfContent(pdfText, metadata.merchantId);
+              if (transactions.length === 0) {
+                issues.push(`Skipped ${file.name}: No transactions found in ${pdfFile.name}.`);
+                continue;
+              }
+
+              consumedPdfNames.add(pdfFile.name.toLowerCase());
+              msgTransactions.push(...transactions);
+            } catch (pdfError: any) {
+              if (pdfError?.message === 'NTB_PDF_PASSWORD_FAILED') {
+                issues.push(`Skipped ${file.name}: failed to open ${pdfFile.name} with password ${password}.`);
+              } else if (pdfError?.message === 'NTB_PDF_INVALID') {
+                issues.push(`Skipped ${file.name}: ${pdfFile.name} is not a valid PDF.`);
+              } else {
+                issues.push(`Skipped ${file.name}: unable to parse ${pdfFile.name} (${pdfError?.message || 'unknown error'}).`);
+              }
+              continue;
+            }
+          }
+
+          // Existing Sampath text format parser
+          if (normalizedText.includes('SAMPATH') || file.name.toUpperCase().includes('SAMPATH')) {
+            const transactions = parseMsgContent(normalizedText);
+            msgTransactions.push(...transactions);
+          }
         }
       }
+
+      // Optional fallback: process directly uploaded NTB PDFs too.
+      for (const pdfFile of pdfFiles) {
+        if (consumedPdfNames.has(pdfFile.name.toLowerCase())) continue;
+
+        const metadata = extractNtbMessageMetadata('', pdfFile.name);
+        if (!metadata.merchantId) continue;
+
+        try {
+          const pdfText = await extractPdfTextWithPassword(pdfFile, buildNtbPdfPassword(metadata.merchantId));
+          const transactions = parseNtbPdfContent(pdfText, metadata.merchantId);
+          if (transactions.length > 0) {
+            msgTransactions.push(...transactions);
+          }
+        } catch {
+          issues.push(`Skipped ${pdfFile.name}: failed to open with password pattern ntb<Merchant ID>.`);
+        }
+      }
+
+      setFileIssues(issues);
 
       if (msgTransactions.length === 0) {
         setError("No valid transactions found in the uploaded text files.");
@@ -89,6 +189,7 @@ function App() {
     setMsgFiles([]);
     setResult(null);
     setError(null);
+    setFileIssues([]);
   };
 
   return (
@@ -172,6 +273,17 @@ function App() {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4 rounded-lg bg-red-50 border border-red-100 text-red-600 flex items-center gap-3">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
             <p>{error}</p>
+          </motion.div>
+        )}
+
+        {fileIssues.length > 0 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4 rounded-lg bg-amber-50 border border-amber-100 text-amber-700">
+            <p className="font-semibold mb-2">Skipped files</p>
+            <div className="space-y-1 text-sm">
+              {fileIssues.map((issue) => (
+                <p key={issue}>{issue}</p>
+              ))}
+            </div>
           </motion.div>
         )}
 
