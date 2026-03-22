@@ -210,6 +210,71 @@ export const parseExcel = async (file: File): Promise<ExcelRow[]> => {
   });
 };
 
+const normalizeHeader = (value: string): string => value.toLowerCase().replace(/\s+/g, ' ').trim();
+
+const getRowValue = (row: Record<string, any>, targetHeader: string): any => {
+  const target = normalizeHeader(targetHeader);
+  const key = Object.keys(row).find((header) => normalizeHeader(header) === target);
+  return key ? row[key] : undefined;
+};
+
+const toCleanString = (value: any): string => {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
+};
+
+const toAmount = (value: any): number => {
+  if (typeof value === 'number') return value;
+  const parsed = parseFloat(toCleanString(value).replace(/,/g, ''));
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const toApprovalCode = (value: any): string => {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'number') return String(Math.trunc(value));
+  return toCleanString(value).replace(/\.0+$/, '');
+};
+
+export const parseCommercialStatementFile = async (file: File): Promise<MsgTransaction[]> => {
+  const data = new Uint8Array(await file.arrayBuffer());
+  const workbook = XLSX.read(data, { type: 'array' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' });
+
+  if (rows.length === 0) return [];
+
+  const firstRow = rows[0];
+  const hasCommercialHeaders =
+    getRowValue(firstRow, 'Merchant ID') !== undefined &&
+    getRowValue(firstRow, 'Approve Number') !== undefined &&
+    getRowValue(firstRow, 'Gross Amount') !== undefined &&
+    getRowValue(firstRow, 'Card Number') !== undefined &&
+    getRowValue(firstRow, 'Discount Amount') !== undefined &&
+    getRowValue(firstRow, 'Net Amount') !== undefined;
+
+  if (!hasCommercialHeaders) return [];
+
+  return rows
+    .map((row) => {
+      const merchantNumber = toCleanString(getRowValue(row, 'Merchant ID'));
+      const authId = toApprovalCode(getRowValue(row, 'Approve Number'));
+      const tranAmount = toAmount(getRowValue(row, 'Gross Amount'));
+      const cardNumber = toCleanString(getRowValue(row, 'Card Number'));
+      const commission = toAmount(getRowValue(row, 'Discount Amount'));
+      const netAmount = toAmount(getRowValue(row, 'Net Amount'));
+
+      return {
+        merchantNumber,
+        cardNumber,
+        tranAmount,
+        commission,
+        netAmount,
+        authId
+      };
+    })
+    .filter((transaction) => transaction.authId && transaction.merchantNumber);
+};
+
 export const parseMsgContent = (content: string): MsgTransaction[] => {
   const transactions: MsgTransaction[] = [];
   const lines = content.split('\n');

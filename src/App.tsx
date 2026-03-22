@@ -16,6 +16,7 @@ import {
   isNtbStatementContent,
   normalizeMessageContent,
   parseExcel,
+  parseCommercialStatementFile,
   parseMsgContent,
   parseNtbPdfContent,
   processFiles,
@@ -78,7 +79,21 @@ function App() {
         // We will read content and check for "SAMPATH" inside parseMsgContent logic or here.
         // Let's read content first.
         
-        if (file.name.toLowerCase().endsWith('.txt') || file.name.toLowerCase().endsWith('.msg')) {
+        const lowerName = file.name.toLowerCase();
+
+        if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls') || lowerName.endsWith('.csv')) {
+          try {
+            const commercialTransactions = await parseCommercialStatementFile(file);
+            if (commercialTransactions.length > 0) {
+              msgTransactions.push(...commercialTransactions);
+            }
+          } catch {
+            issues.push(`Skipped ${file.name}: unable to parse Commercial Bank workbook.`);
+          }
+          continue;
+        }
+
+        if (lowerName.endsWith('.txt') || lowerName.endsWith('.msg')) {
           const rawText = await file.text();
           const normalizedText = normalizeMessageContent(rawText);
           const isNtbFile = isNtbStatementContent(normalizedText) || file.name.toUpperCase().includes('NATIONS');
