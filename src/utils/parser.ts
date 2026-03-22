@@ -21,6 +21,7 @@ export interface MsgTransaction {
   commission: number;
   netAmount: number;
   authId: string;
+  settleDate: string;
 }
 
 export interface ProcessedResult {
@@ -67,6 +68,13 @@ export const extractNtbMessageMetadata = (content: string, fallbackName = ''): N
 export const buildNtbPdfPassword = (merchantId: string): string => `ntb${merchantId}`;
 
 const parseAmount = (value: string): number => parseFloat(value.replace(/,/g, '').trim());
+const toDateText = (value: any): string => {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value === 'number') {
+    return XLSX.SSF.format('yyyy-mm-dd', value);
+  }
+  return String(value).trim();
+};
 
 export const extractPdfTextWithPassword = async (file: File, password: string): Promise<string> => {
   const data = new Uint8Array(await file.arrayBuffer());
@@ -114,6 +122,8 @@ export const parseNtbPdfContent = (content: string, merchantIdFallback = ''): Ms
   const transactions: MsgTransaction[] = [];
   const merchantMatch = content.match(/Account\s*Number\s*:?\s*(\d{8,})/i);
   const merchantNumber = merchantMatch?.[1] || merchantIdFallback;
+  const statementDateMatch = content.match(/Statement\s*Date\s*:?\s*([0-9]{1,2}\s+[A-Za-z]{3}\s+[0-9]{4})/i);
+  const settleDate = statementDateMatch?.[1]?.trim() || '';
 
   const rowRegex =
     /(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s+(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s+([0-9*Xx\-]+)\s+(\d{4,})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})/g;
@@ -133,7 +143,8 @@ export const parseNtbPdfContent = (content: string, merchantIdFallback = ''): Ms
         tranAmount,
         commission,
         netAmount,
-        authId
+        authId,
+        settleDate
       });
     }
   }
@@ -262,6 +273,7 @@ export const parseCommercialStatementFile = async (file: File): Promise<MsgTrans
       const cardNumber = toCleanString(getRowValue(row, 'Card Number'));
       const commission = toAmount(getRowValue(row, 'Discount Amount'));
       const netAmount = toAmount(getRowValue(row, 'Net Amount'));
+      const settleDate = toDateText(getRowValue(row, 'Settlement Date'));
 
       return {
         merchantNumber,
@@ -269,7 +281,8 @@ export const parseCommercialStatementFile = async (file: File): Promise<MsgTrans
         tranAmount,
         commission,
         netAmount,
-        authId
+        authId,
+        settleDate
       };
     })
     .filter((transaction) => transaction.authId && transaction.merchantNumber);
@@ -278,6 +291,8 @@ export const parseCommercialStatementFile = async (file: File): Promise<MsgTrans
 export const parseMsgContent = (content: string): MsgTransaction[] => {
   const transactions: MsgTransaction[] = [];
   const lines = content.split('\n');
+  const paymentDateMatch = content.match(/Payment\s*Date\s*:\s*([0-9]{1,2}\/[0-9]{1,2}\/[0-9]{4})/i);
+  const settleDate = paymentDateMatch?.[1]?.trim() || '';
   
   let merchantNumber = '';
   let inTable = false;
@@ -344,7 +359,8 @@ export const parseMsgContent = (content: string): MsgTransaction[] => {
           tranAmount,
           commission,
           netAmount,
-          authId
+          authId,
+          settleDate
         });
       }
     }
@@ -419,6 +435,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
         ...row,
         AUTH: match.authId,
         'MERCHANT NUMBER': match.merchantNumber,
+        'SETTLE. DATE': match.settleDate,
         'TRX.AMT': match.tranAmount,
         'CARD NUMBER': match.cardNumber,
         'COM. AMOUNT': match.commission,
@@ -429,6 +446,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
         ...row,
         AUTH: '',
         'MERCHANT NUMBER': '',
+        'SETTLE. DATE': '',
         'TRX.AMT': '',
         'CARD NUMBER': '',
         'COM. AMOUNT': '',
@@ -445,6 +463,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
       Total: '',
       AUTH: t.authId,
       'MERCHANT NUMBER': t.merchantNumber,
+      'SETTLE. DATE': t.settleDate,
       'TRX.AMT': t.tranAmount,
       'CARD NUMBER': t.cardNumber,
       'COM. AMOUNT': t.commission,
@@ -484,6 +503,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
     Total: summary.totalExisting,
     AUTH: '',
     'MERCHANT NUMBER': '',
+    'SETTLE. DATE': '',
     'TRX.AMT': summary.totalTrx,
     'CARD NUMBER': '',
     'COM. AMOUNT': summary.totalCommission,
@@ -496,6 +516,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
     Total: '',
     AUTH: '',
     'MERCHANT NUMBER': '',
+    'SETTLE. DATE': '',
     'TRX.AMT': '',
     'CARD NUMBER': '',
     'COM. AMOUNT': '',
@@ -508,6 +529,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
     Total: '',
     AUTH: 'AUTH',
     'MERCHANT NUMBER': 'MERCHANT NUMBER',
+    'SETTLE. DATE': 'SETTLE. DATE',
     'TRX.AMT': 'TRX.AMT',
     'CARD NUMBER': 'CARD NUMBER',
     'COM. AMOUNT': 'COM. AMOUNT',
