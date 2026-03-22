@@ -28,3 +28,17 @@ A React + TypeScript app to reconcile payment schedule data with Sampath transac
   `pnpm build`
 - Preview production build:
   `pnpm preview`
+
+## Analytics (GA4)
+
+To enable Google Analytics 4 event tracking, set this variable in your environment:
+
+- `VITE_GA4_MEASUREMENT_ID=G-XXXXXXXXXX`
+
+When configured, the app tracks privacy-safe usage events (no card numbers or voucher values), such as:
+
+- `process_started`
+- `process_completed`
+- `bank_parser_used`
+- `file_skipped`
+- `download_excel`

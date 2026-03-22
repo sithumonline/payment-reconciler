@@ -25,6 +25,7 @@ import {
 } from './utils/parser';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
+import { trackEvent } from './utils/analytics';
 
 function App() {
   const [excelFile, setExcelFile] = useState<File | null>(null);
@@ -33,6 +34,18 @@ function App() {
   const [result, setResult] = useState<ProcessedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fileIssues, setFileIssues] = useState<string[]>([]);
+  
+  const issueReason = (issue: string): string => {
+    const normalized = issue.toLowerCase();
+    if (normalized.includes('merchant id not found')) return 'merchant_id_not_found';
+    if (normalized.includes('password')) return 'password_failed';
+    if (normalized.includes('not a valid pdf')) return 'invalid_pdf';
+    if (normalized.includes('pdf attachment not found')) return 'pdf_attachment_missing';
+    if (normalized.includes('commercial bank workbook')) return 'commercial_parse_failed';
+    if (normalized.includes('no transactions found')) return 'no_transactions_found';
+    if (normalized.includes('unable to parse')) return 'parse_failed';
+    return 'other';
+  };
 
   const handleProcess = async () => {
     if (!excelFile || msgFiles.length === 0) {
@@ -40,10 +53,15 @@ function App() {
       return;
     }
 
+    const startedAt = performance.now();
     setIsProcessing(true);
     setError(null);
     setResult(null);
     setFileIssues([]);
+    trackEvent('process_started', {
+      excel_extension: excelFile.name.split('.').pop()?.toLowerCase() || 'unknown',
+      log_file_count: msgFiles.length
+    });
 
     try {
       // 1. Parse Excel
@@ -55,6 +73,9 @@ function App() {
       const pdfFiles = msgFiles.filter(file => file.name.toLowerCase().endsWith('.pdf'));
       const pdfFilesByName = new Map<string, File>(pdfFiles.map(file => [file.name.toLowerCase(), file] as [string, File]));
       const consumedPdfNames = new Set<string>();
+      let commercialRecords = 0;
+      let ntbRecords = 0;
+      let sampathRecords = 0;
 
       const findNtbPdfFile = (attachmentName: string | null, merchantId: string | null): File | null => {
         if (attachmentName) {
@@ -86,6 +107,11 @@ function App() {
             const commercialTransactions = await parseCommercialStatementFile(file);
             if (commercialTransactions.length > 0) {
               msgTransactions.push(...commercialTransactions);
+              commercialRecords += commercialTransactions.length;
+              trackEvent('bank_parser_used', {
+                bank: 'commercial',
+                transactions: commercialTransactions.length
+              });
             }
           } catch {
             issues.push(`Skipped ${file.name}: unable to parse Commercial Bank workbook.`);
@@ -128,6 +154,11 @@ function App() {
 
               consumedPdfNames.add(pdfFile.name.toLowerCase());
               msgTransactions.push(...transactions);
+              ntbRecords += transactions.length;
+              trackEvent('bank_parser_used', {
+                bank: 'ntb',
+                transactions: transactions.length
+              });
             } catch (pdfError: any) {
               if (pdfError?.message === 'NTB_PDF_PASSWORD_FAILED') {
                 issues.push(`Skipped ${file.name}: failed to open ${pdfFile.name} with password ${password}.`);
@@ -144,6 +175,13 @@ function App() {
           if (normalizedText.includes('SAMPATH') || file.name.toUpperCase().includes('SAMPATH')) {
             const transactions = parseMsgContent(normalizedText);
             msgTransactions.push(...transactions);
+            sampathRecords += transactions.length;
+            if (transactions.length > 0) {
+              trackEvent('bank_parser_used', {
+                bank: 'sampath',
+                transactions: transactions.length
+              });
+            }
           }
         }
       }
@@ -160,12 +198,20 @@ function App() {
           const transactions = parseNtbPdfContent(pdfText, metadata.merchantId);
           if (transactions.length > 0) {
             msgTransactions.push(...transactions);
+            ntbRecords += transactions.length;
+            trackEvent('bank_parser_used', {
+              bank: 'ntb',
+              transactions: transactions.length
+            });
           }
         } catch {
           issues.push(`Skipped ${pdfFile.name}: failed to open with password pattern ntb<Merchant ID>.`);
         }
       }
 
+      for (const issue of issues) {
+        trackEvent('file_skipped', { reason: issueReason(issue) });
+      }
       setFileIssues(issues);
 
       if (msgTransactions.length === 0) {
@@ -177,10 +223,23 @@ function App() {
       // 3. Process and Match
       const processed = processFiles(excelData, msgTransactions);
       setResult(processed);
+      trackEvent('process_completed', {
+        matched_count: processed.summary.matchedCount,
+        total_existing: Number(processed.summary.totalExisting.toFixed(2)),
+        total_trx: Number(processed.summary.totalTrx.toFixed(2)),
+        total_commission: Number(processed.summary.totalCommission.toFixed(2)),
+        total_net: Number(processed.summary.totalNet.toFixed(2)),
+        skipped_files: issues.length,
+        parser_records_commercial: commercialRecords,
+        parser_records_ntb: ntbRecords,
+        parser_records_sampath: sampathRecords,
+        duration_ms: Math.round(performance.now() - startedAt)
+      });
 
     } catch (err) {
       console.error(err);
       setError("An error occurred during processing. Please check your files.");
+      trackEvent('session_error', { step: 'handle_process', category: 'processing_failed' });
     } finally {
       setIsProcessing(false);
     }
@@ -197,6 +256,9 @@ function App() {
     const date = new Date().toISOString().slice(0, 10);
     const time = new Date().toLocaleTimeString();
     XLSX.writeFile(wb, `processed_payment_data_${date}_${time}.xlsx`);
+    trackEvent('download_excel', {
+      rows_exported: result.updatedData.length
+    });
   };
 
   const handleReset = () => {
