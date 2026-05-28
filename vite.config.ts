@@ -1,13 +1,15 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig } from 'vite';
 
-export default defineConfig(({mode}) => {
-  const isProduction = mode === 'production';
+export default defineConfig(({ mode }) => {
+  // Detects if the build is running on GitHub Actions
+  const isGitHubPages = process.env.GITHUB_ACTIONS === 'true';
 
   return {
-    base: isProduction ? '/payment-reconciler/' : '/',
+    // Uses subfolder for GitHub, root for Netlify and local development
+    base: isGitHubPages ? '/payment-reconciler/' : '/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
@@ -15,8 +17,6 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
     },
   };
