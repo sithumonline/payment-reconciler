@@ -210,8 +210,19 @@ export const parseExcel = async (file: File): Promise<ExcelRow[]> => {
         const workbook = XLSX.read(data, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const json = XLSX.utils.sheet_to_json<ExcelRow>(sheet);
-        resolve(json);
+        const rawJson = XLSX.utils.sheet_to_json<ExcelRow>(sheet);
+        // Voucher numbers like "097514" are stored as the number 97514 with a
+        // zero-padded display format. The raw read drops the leading zero, so
+        // we read once more with formatting applied and pull the Voucher No.
+        // column from there to preserve the original display.
+        const formattedJson = XLSX.utils.sheet_to_json<ExcelRow>(sheet, { raw: false });
+        const merged = rawJson.map((row, idx) => {
+          const formattedVoucher = formattedJson[idx]?.['Voucher No.'];
+          return formattedVoucher !== undefined && formattedVoucher !== null && formattedVoucher !== ''
+            ? { ...row, 'Voucher No.': formattedVoucher }
+            : row;
+        });
+        resolve(merged);
       } catch (error) {
         reject(error);
       }
@@ -390,12 +401,8 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
     return true;
   });
 
-  // Create a map for fast lookup
   const msgMap = new Map<string, MsgTransaction>();
   uniqueMsgTransactions.forEach(t => {
-    // Normalize Auth ID (remove leading zeros if necessary, or keep as string)
-    // CSV Voucher No might be "074680" or "74680". 
-    // Let's try to match exactly first, maybe handle loose matching if needed.
     msgMap.set(t.authId, t);
   });
 
@@ -408,15 +415,7 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
 
   const updatedData = excelData.map(row => {
     const voucherNo = row['Voucher No.'];
-    let match: MsgTransaction | undefined;
-
-    if (voucherNo) {
-      match = msgMap.get(voucherNo.toString());
-      // Fallback: try removing leading zeros from voucherNo if not found
-      if (!match && typeof voucherNo === 'string' && voucherNo.startsWith('0')) {
-         match = msgMap.get(voucherNo.replace(/^0+/, ''));
-      }
-    }
+    const match = voucherNo ? msgMap.get(voucherNo.toString()) : undefined;
 
     // Accumulate existing total
     const existingTotal = typeof row['Total'] === 'number' ? row['Total'] : parseFloat((row['Total'] || '0').toString().replace(/,/g, ''));
