@@ -401,9 +401,11 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
     return true;
   });
 
+  const stripLeadingZeros = (s: string) => s.replace(/^0+/, '') || '0';
+
   const msgMap = new Map<string, MsgTransaction>();
   uniqueMsgTransactions.forEach(t => {
-    msgMap.set(t.authId, t);
+    msgMap.set(stripLeadingZeros(t.authId), t);
   });
 
   let totalExisting = 0;
@@ -415,7 +417,8 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
 
   const updatedData = excelData.map(row => {
     const voucherNo = row['Voucher No.'];
-    const match = voucherNo ? msgMap.get(voucherNo.toString()) : undefined;
+    const voucherStr = voucherNo !== undefined && voucherNo !== null ? voucherNo.toString() : '';
+    const match = voucherStr ? msgMap.get(stripLeadingZeros(voucherStr)) : undefined;
 
     // Accumulate existing total
     const existingTotal = typeof row['Total'] === 'number' ? row['Total'] : parseFloat((row['Total'] || '0').toString().replace(/,/g, ''));
@@ -430,8 +433,13 @@ export const processFiles = (excelData: ExcelRow[], msgTransactions: MsgTransact
       totalNet += match.netAmount;
       matchedAuthIds.add(match.authId);
 
+      // Prefer whichever side preserved the leading zero so the padded form
+      // shows up in the exported sheet.
+      const displayVoucher = match.authId.length >= voucherStr.length ? match.authId : voucherStr;
+
       return {
         ...row,
+        'Voucher No.': displayVoucher,
         AUTH: match.authId,
         'MERCHANT NUMBER': match.merchantNumber,
         'SETTLE. DATE': match.settleDate,
